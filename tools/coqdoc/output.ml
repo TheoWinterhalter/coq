@@ -1331,11 +1331,11 @@ module MyST = struct
   let proofbox () = printf "&#9744;"
 
   let reach_item_level n =
-    printf "-"
+    indentation (n-1)
 
   let item n =
-    indentation (n-1);
-    reach_item_level n
+    reach_item_level n;
+    printf "-"
 
   let stop_item () = ()
 

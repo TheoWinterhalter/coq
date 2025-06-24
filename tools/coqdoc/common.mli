@@ -9,7 +9,7 @@
 (************************************************************************)
 
 (* Misc types **********************************************************************)
-type target_language = LaTeX | HTML | TeXmacs | Raw
+type target_language = LaTeX | HTML | TeXmacs | Raw | MyST
 type output_t = StdOut | MultFiles | File of string
 type coq_module = string
 type file_t = Vernac_file of string * coq_module | Latex_file of string

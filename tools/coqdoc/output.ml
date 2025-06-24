@@ -1220,99 +1220,509 @@ module Raw = struct
 end
 
 
+(*s MyST output *)
+
+module MyST = struct
+
+  let header () = ()
+
+  let trailer () = ()
+
+  let start_module () =
+    let ln = !prefs.lib_name in
+    if not !prefs.short then begin
+      let (m,sub) = !current_module in
+        add_toc_entry (Toc_library (m,sub));
+        if ln = ""  then
+          printf "# %s\n\n" (get_module true)
+        else
+          printf "# %s %s\n\n" ln (get_module true)
+    end
+
+  let indentation n =
+    (* for _i = 1 to n do printf "&nbsp;" done *)
+    printf "XXX (indentation)"
+
+  let line_break () = printf "<br>\n"
+
+  let empty_line_of_code () =
+    printf "\n<br/>\n"
+
+  let nbsp () = printf "&nbsp;"
+
+  let char = function
+    | '<' -> printf "&lt;"
+    | '>' -> printf "&gt;"
+    | '&' -> printf "&amp;"
+    | c -> output_char c
+
+  let escaped =
+    let buff = Buffer.create 5 in
+    fun s ->
+      Buffer.clear buff;
+      for i = 0 to String.length s - 1 do
+        match s.[i] with
+        | '<' -> Buffer.add_string buff "&lt;"
+        | '>' -> Buffer.add_string buff "&gt;"
+        | '&' -> Buffer.add_string buff "&amp;"
+        | '\"' -> Buffer.add_string buff "&quot;"
+        | c -> Buffer.add_char buff c
+      done;
+      Buffer.contents buff
+
+  let sanitize_name s =
+    let rec loop esc i =
+      if i < 0 then if esc then escaped s else s
+      else match s.[i] with
+      | 'a'..'z' | 'A'..'Z' | '0'..'9' | '.' | '_' -> loop esc (i-1)
+      | '<' | '>' | '&' | '\'' | '\"' -> loop true (i-1)
+      | '-' | ':' -> loop esc (i-1) (* should be safe in HTML5 attribute name syntax *)
+      | _ ->
+        (* This name contains complex characters:
+           this is probably a notation string, we simply hash it. *)
+        Digest.to_hex (Digest.string s)
+    in loop false (String.length s - 1)
+
+  let latex_char _ = ()
+  let latex_string _ = ()
+
+  let html_char = output_char
+  let html_string = output_string
+
+  let start_latex_math () = ()
+  let stop_latex_math () = ()
+
+  let start_quote () = char '"'
+  let stop_quote () = start_quote ()
+
+  let start_verbatim inline =
+    if inline then printf "`"
+    else printf "```\n"
+
+  let stop_verbatim inline =
+    if inline then printf "`"
+    else printf "```\n"
+
+  let url addr name =
+    printf "[%s](%s)" addr
+      (match name with
+       | Some n -> n
+       | None -> addr)
+
+  let ident_ref m fid typ s =
+    match find_module m with
+    | Local ->
+        printf "<a class=\"idref\" href=\"%s.html#%s\">" m (sanitize_name fid);
+        printf "<span class=\"id\" title=\"%s\">%s</span></a>" typ s
+    | External m when !prefs.externals ->
+        printf "<a class=\"idref\" href=\"%s.html#%s\">" m (sanitize_name fid);
+        printf "<span class=\"id\" title=\"%s\">%s</span></a>" typ s
+    | External _ | Unknown ->
+        printf "<span class=\"id\" title=\"%s\">%s</span>" typ s
+
+  let reference s r =
+    match r with
+    | Def [] -> assert false
+    | Def [fullid,ty] ->
+         let s' = sanitize_name fullid in
+         printf "<a id=\"%s\" class=\"idref\" href=\"#%s\">" s' s';
+         printf "<span class=\"id\" title=\"%s\">%s</span></a>" (type_name ty) s
+    | Def ((hd_id,_) :: tail as all) ->
+        let hd = sanitize_name hd_id in
+        let all_tys = all
+          |> List.map (fun (_,ty) -> type_name ty)
+          |> CList.sort_uniquize String.compare
+          |> String.concat ", " in
+        printf "<a id=\"%s\" class=\"idref\" href=\"#%s\"><span class=\"id\" title=\"%s\">" hd hd all_tys;
+        List.iter (fun (fullid,_) ->
+          let s' = sanitize_name fullid in
+          printf "<span id=\"%s\" class=\"id\">" s')
+        tail;
+        printf "%s" s;
+        List.iter (fun _ -> printf "</span>") tail;
+        printf "</span></a>";
+    | Ref (m,fullid,ty) ->
+        ident_ref m fullid (type_name ty) s
+
+  let output_sublexer_string doescape issymbchar tag s =
+    let s = if doescape then escaped s else s in
+    match tag with
+    | Some ref -> reference s ref
+    | None ->
+        if issymbchar then output_string s
+        else printf "<span class=\"id\" title=\"var\">%s</span>" s
+
+  let sublexer c loc =
+    let tag =
+      try Some (Index.find (get_module false) loc) with Not_found -> None
+    in
+    Tokens.output_tagged_symbol_char tag c
+
+  let sublexer_in_doc c =
+    Tokens.output_tagged_symbol_char None c
+
+  let initialize () =
+    initialize_tex_html();
+    Tokens.token_tree := token_tree_html;
+    Tokens.outfun := output_sublexer_string
+
+  let translate s =
+    match Tokens.translate s with Some s -> s | None -> escaped s
+
+  let keyword s loc =
+    printf "<span class=\"id\" title=\"keyword\">%s</span>" (translate s)
+
+  let ident s loc =
+    try
+      match loc with
+      | None -> raise Not_found
+      | Some loc ->
+         reference (translate s) (Index.find (get_module false) loc)
+    with Not_found ->
+      if is_tactic s then
+        printf "<span class=\"id\" title=\"tactic\">%s</span>" (translate s)
+      else if is_keyword s then
+        printf "<span class=\"id\" title=\"keyword\">%s</span>" (translate s)
+      else if !prefs.interpolate && !in_doc (* always a var otherwise *) then
+        try reference (translate s) (Index.find_string s)
+        with Not_found -> Tokens.output_tagged_ident_string s
+      else
+        Tokens.output_tagged_ident_string s
+
+  let proofbox () = printf "<font size=-2>&#9744;</font>"
+
+  let rec reach_item_level n =
+    if !item_level < n then begin
+      printf "<ul class=\"doclist\">\n<li>"; incr item_level;
+      reach_item_level n
+    end else if !item_level > n then begin
+      printf "\n</li>\n</ul>\n"; decr item_level;
+      reach_item_level n
+    end
+
+  let item n =
+    let old_level = !item_level in
+    reach_item_level n;
+    if n <= old_level then printf "\n</li>\n<li>"
+
+  let stop_item () = reach_item_level 0
+
+  let start_coq () = if not !prefs.raw_comments then printf "<div class=\"code\">\n"
+
+  let end_coq () = if not !prefs.raw_comments then printf "</div>\n"
+
+  let start_doc () = in_doc := true;
+    if not !prefs.raw_comments then
+      printf "\n<div class=\"doc\">\n"
+
+  let end_doc () = in_doc := false;
+    stop_item ();
+    if not !prefs.raw_comments then printf "</div>\n"
+
+  let start_emph () = printf "<i>"
+
+  let stop_emph () = printf "</i>"
+
+  let start_details = function
+    | Some s -> printf "<details><summary>%s</summary>" s
+    | _ -> printf "<details>"
+
+  let stop_details () = printf "</details>"
+
+  let start_comment () = printf "<span class=\"comment\">(*"
+
+  let end_comment () = printf "*)</span>"
+
+  let start_inline_coq () =
+    if !prefs.inline_notmono then printf "<span class=\"inlinecodenm\">"
+                       else printf "<span class=\"inlinecode\">"
+
+  let end_inline_coq () = printf "</span>"
+
+  let start_inline_coq_block () = line_break (); start_inline_coq ()
+
+  let end_inline_coq_block () = end_inline_coq ()
+
+  let paragraph () = printf "\n<div class=\"paragraph\"> </div>\n\n"
+
+  (* inference rules *)
+  let inf_rule assumptions (_,_,midnm) conclusions =
+    (* this first function replaces any occurrence of 3 or more spaces
+       in a row with "&nbsp;"s.  We do this to the assumptions so that
+       people can put multiple rules on a line with nice formatting *)
+    let replace_spaces str =
+      let rec copy a n = match n with 0 -> [] | n -> (a :: copy a (n - 1)) in
+      let results = Str.full_split (Str.regexp "[' '][' '][' ']+") str in
+      let strs = List.map (fun r -> match r with
+                                    | Str.Text s  -> [s]
+                                    | Str.Delim s ->
+                                        copy "&nbsp;" (String.length s))
+                          results
+      in
+        String.concat "" (List.concat strs)
+    in
+    let start_assumption line =
+          (printf "<tr class=\"infruleassumption\">\n";
+           printf "  <td class=\"infrule\">%s</td>\n" (replace_spaces line)) in
+    let end_assumption () =
+          (printf "  <td></td>\n";
+           printf "</tr>\n") in
+    let rec print_assumptions hyps =
+          match hyps with
+          | []                 -> start_assumption "&nbsp;&nbsp;"
+          | [(_,hyp)]          -> start_assumption hyp
+          | ((_,hyp) :: hyps') -> (start_assumption hyp;
+                                   end_assumption ();
+                                   print_assumptions hyps') in
+    printf "<center><table class=\"infrule\">\n";
+    print_assumptions assumptions;
+    printf "  <td class=\"infrulenamecol\" rowspan=\"3\">\n";
+    (match midnm with
+     | None   -> printf "    &nbsp;\n  </td>"
+     | Some s -> printf "    %s &nbsp;\n  </td>" s);
+    printf "</tr>\n";
+    printf "<tr class=\"infrulemiddle\">\n";
+    printf "  <td class=\"infrule\"><hr /></td>\n";
+    printf "</tr>\n";
+    print_assumptions conclusions;
+    end_assumption ();
+    printf "</table></center>"
+
+  let section lev f =
+    let lab = new_label () in
+    let r = sprintf "%s.html#%s" (get_module false) lab in
+    (match !prefs.toc_depth with
+     | None -> add_toc_entry (Toc_section (lev, f, r))
+     | Some n -> if lev <= n then add_toc_entry (Toc_section (lev, f, r))
+                   else ());
+    stop_item ();
+    printf "<a id=\"%s\"></a><h%d class=\"section\">" lab lev;
+    f ();
+    printf "</h%d>\n" lev
+
+  let rule () = printf "<hr/>\n"
+
+  (* make a HTML index from a list of triples (name,text,link) *)
+  let index_ref i c =
+    let idxc = sprintf "%s_%c" i.idx_name c in
+    !prefs.index_name ^ (if !prefs.multi_index then "_" ^ idxc ^ ".html" else ".html#" ^ idxc)
+
+  let letter_index category idx (c,l) =
+    if l <> [] then begin
+      let cat = if category && idx <> "global" then "(" ^ idx ^ ")" else "" in
+      printf "<a id=\"%s_%c\"></a><h2>%s %s</h2>\n" idx c (display_letter c) cat;
+      List.iter
+        (fun (id,(text,link,t)) ->
+           let id' = escaped (prepare_entry id t) in
+           printf "<a href=\"%s\">%s</a> %s<br/>\n" link id' text) l;
+      printf "<br/><br/>"
+    end
+
+  let all_letters i = List.iter (letter_index false i.idx_name) i.idx_entries
+
+  (* Construction d'une liste des index (1 index global, puis 1
+     index par catégorie) *)
+  let format_global_index =
+    Index.map
+      (fun s (m,t) ->
+        if t = Library then
+         let ln = !prefs.lib_name in
+           if ln <> "" then
+               "[" ^ String.lowercase_ascii ln ^ "]", m ^ ".html", t
+           else
+               "[library]", m ^ ".html", t
+        else
+         sprintf "[%s, in <a href=\"%s.html\">%s</a>]" (type_name t) m m ,
+        sprintf "%s.html#%s" m (sanitize_name s), t)
+
+  let format_bytype_index = function
+    | Library, idx ->
+        Index.map (fun id m -> "", m ^ ".html", Library) idx
+    | (t,idx) ->
+        Index.map
+          (fun s m ->
+             let text = sprintf "[in <a href=\"%s.html\">%s</a>]" m m in
+               (text, sprintf "%s.html#%s" m (sanitize_name s), t)) idx
+
+  (* Impression de la table d'index *)
+  let print_index_table_item i =
+    printf "<tr>\n<td>%s Index</td>\n" (String.capitalize_ascii i.idx_name);
+    List.iter
+      (fun (c,l) ->
+         if l <> [] then
+           printf "<td><a href=\"%s\">%s</a></td>\n" (index_ref i c)
+             (display_letter c)
+         else
+           printf "<td>%s</td>\n" (display_letter c))
+      i.idx_entries;
+    let n = i.idx_size in
+      printf "<td>(%d %s)</td>\n" n (if n > 1 then "entries" else "entry");
+      printf "</tr>\n"
+
+  let print_index_table idxl =
+    printf "<table>\n";
+    List.iter print_index_table_item idxl;
+    printf "</table>\n"
+
+  let make_one_multi_index prt_tbl i =
+    (* Attn: make_one_multi_index crée un nouveau fichier... *)
+    let idx = i.idx_name in
+    let one_letter ((c,l) as cl) =
+      open_out_file (sprintf "%s_%s_%c.html" !prefs.index_name idx c);
+      if (!prefs.header_trailer) then header ();
+      prt_tbl (); printf "<hr/>";
+      letter_index true idx cl;
+      if List.length l > 30 then begin printf "<hr/>"; prt_tbl () end;
+      if (!prefs.header_trailer) then trailer ();
+      close_out_file ()
+    in
+      List.iter one_letter i.idx_entries
+
+  let make_multi_index () =
+    let all_index =
+      let glob,bt = Index.all_entries () in
+        (format_global_index glob) ::
+          (List.map format_bytype_index bt) in
+    let print_table () = print_index_table all_index in
+      List.iter (make_one_multi_index print_table) all_index
+
+  let make_index () =
+    let all_index =
+      let glob,bt = Index.all_entries () in
+        (format_global_index glob) ::
+          (List.map format_bytype_index bt) in
+    let print_table () = print_index_table all_index in
+    let print_one_index i =
+      if i.idx_size > 0 then begin
+        printf "<hr/>\n<h1>%s Index</h1>\n" (String.capitalize_ascii i.idx_name);
+        all_letters i
+      end
+    in
+      set_module "Index" None;
+      if !prefs.title <> "" then printf "<h1>%s</h1>\n" !prefs.title;
+      print_table ();
+      if not (!prefs.multi_index) then
+        begin
+          List.iter print_one_index all_index;
+          printf "<hr/>"; print_table ()
+        end
+
+    let make_toc () =
+        let ln = !prefs.lib_name in
+      let make_toc_entry = function
+        | Toc_library (m,sub) ->
+                stop_item ();
+                let ms = match sub with | None -> m | Some s -> m ^ ": " ^ s in
+              if ln = "" then
+                  printf "<h2><a href=\"%s.html\">%s</a></h2>\n" m ms
+              else
+                  printf "<h2><a href=\"%s.html\">%s %s</a></h2>\n" m ln ms
+        | Toc_section (n, f, r) ->
+                item n;
+                printf "<a href=\"%s\">" r; f (); printf "</a>\n"
+      in
+        printf "<div id=\"toc\">\n";
+        Queue.iter make_toc_entry toc_q;
+        stop_item ();
+        printf "</div>\n"
+
+end
+
+
 
 (*s Generic output *)
 
-let select f1 f2 f3 f4 x =
-  match !prefs.targetlang with LaTeX -> f1 x | HTML -> f2 x | TeXmacs -> f3 x | Raw -> f4 x
+let select f1 f2 f3 f4 f5 x =
+  match !prefs.targetlang with LaTeX -> f1 x | HTML -> f2 x | TeXmacs -> f3 x | Raw -> f4 x | MyST -> f5 x
 
 let push_in_preamble = Latex.push_in_preamble
 
-let header = select Latex.header Html.header TeXmacs.header Raw.header
-let trailer = select Latex.trailer Html.trailer TeXmacs.trailer Raw.trailer
+let header = select Latex.header Html.header TeXmacs.header Raw.header MyST.header
+let trailer = select Latex.trailer Html.trailer TeXmacs.trailer Raw.trailer MyST.trailer
 
 let start_module =
-  select Latex.start_module Html.start_module TeXmacs.start_module Raw.start_module
+  select Latex.start_module Html.start_module TeXmacs.start_module Raw.start_module MyST.start_module
 
-let start_doc = select Latex.start_doc Html.start_doc TeXmacs.start_doc Raw.start_doc
-let end_doc = select Latex.end_doc Html.end_doc TeXmacs.end_doc Raw.end_doc
+let start_doc = select Latex.start_doc Html.start_doc TeXmacs.start_doc Raw.start_doc MyST.start_doc
+let end_doc = select Latex.end_doc Html.end_doc TeXmacs.end_doc Raw.end_doc MyST.end_doc
 
-let start_comment = select Latex.start_comment Html.start_comment TeXmacs.start_comment Raw.start_comment
-let end_comment = select Latex.end_comment Html.end_comment TeXmacs.end_comment Raw.end_comment
+let start_comment = select Latex.start_comment Html.start_comment TeXmacs.start_comment Raw.start_comment MyST.start_comment
+let end_comment = select Latex.end_comment Html.end_comment TeXmacs.end_comment Raw.end_comment MyST.end_comment
 
-let start_coq = select Latex.start_coq Html.start_coq TeXmacs.start_coq Raw.start_coq
-let end_coq = select Latex.end_coq Html.end_coq TeXmacs.end_coq Raw.end_coq
+let start_coq = select Latex.start_coq Html.start_coq TeXmacs.start_coq Raw.start_coq MyST.start_coq
+let end_coq = select Latex.end_coq Html.end_coq TeXmacs.end_coq Raw.end_coq MyST.end_coq
 
 let start_inline_coq =
-  select Latex.start_inline_coq Html.start_inline_coq TeXmacs.start_inline_coq Raw.start_inline_coq
+  select Latex.start_inline_coq Html.start_inline_coq TeXmacs.start_inline_coq Raw.start_inline_coq MyST.start_inline_coq
 let end_inline_coq =
-  select Latex.end_inline_coq Html.end_inline_coq TeXmacs.end_inline_coq Raw.end_inline_coq
+  select Latex.end_inline_coq Html.end_inline_coq TeXmacs.end_inline_coq Raw.end_inline_coq MyST.end_inline_coq
 
 let start_inline_coq_block =
   select Latex.start_inline_coq_block Html.start_inline_coq_block
     TeXmacs.start_inline_coq_block Raw.start_inline_coq_block
+    MyST.start_inline_coq_block
 let end_inline_coq_block =
-  select Latex.end_inline_coq_block Html.end_inline_coq_block TeXmacs.end_inline_coq_block Raw.end_inline_coq_block
+  select Latex.end_inline_coq_block Html.end_inline_coq_block TeXmacs.end_inline_coq_block Raw.end_inline_coq_block MyST.end_inline_coq_block
 
-let indentation = select Latex.indentation Html.indentation TeXmacs.indentation Raw.indentation
-let paragraph = select Latex.paragraph Html.paragraph TeXmacs.paragraph Raw.paragraph
-let line_break = select Latex.line_break Html.line_break TeXmacs.line_break Raw.line_break
+let indentation = select Latex.indentation Html.indentation TeXmacs.indentation Raw.indentation MyST.indentation
+let paragraph = select Latex.paragraph Html.paragraph TeXmacs.paragraph Raw.paragraph MyST.paragraph
+let line_break = select Latex.line_break Html.line_break TeXmacs.line_break Raw.line_break MyST.line_break
 let empty_line_of_code = select
-  Latex.empty_line_of_code Html.empty_line_of_code TeXmacs.empty_line_of_code Raw.empty_line_of_code
+  Latex.empty_line_of_code Html.empty_line_of_code TeXmacs.empty_line_of_code Raw.empty_line_of_code MyST.empty_line_of_code
 
-let section = select Latex.section Html.section TeXmacs.section Raw.section
-let item = select Latex.item Html.item TeXmacs.item Raw.item
-let stop_item = select Latex.stop_item Html.stop_item TeXmacs.stop_item Raw.stop_item
-let reach_item_level = select Latex.reach_item_level Html.reach_item_level TeXmacs.reach_item_level Raw.reach_item_level
-let rule = select Latex.rule Html.rule TeXmacs.rule Raw.rule
+let section = select Latex.section Html.section TeXmacs.section Raw.section MyST.section
+let item = select Latex.item Html.item TeXmacs.item Raw.item MyST.item
+let stop_item = select Latex.stop_item Html.stop_item TeXmacs.stop_item Raw.stop_item MyST.stop_item
+let reach_item_level = select Latex.reach_item_level Html.reach_item_level TeXmacs.reach_item_level Raw.reach_item_level MyST.reach_item_level
+let rule = select Latex.rule Html.rule TeXmacs.rule Raw.rule MyST.rule
 
-let nbsp = select Latex.nbsp Html.nbsp TeXmacs.nbsp Raw.nbsp
-let char = select Latex.char Html.char TeXmacs.char Raw.char
-let keyword = select Latex.keyword Html.keyword TeXmacs.keyword Raw.keyword
-let ident = select Latex.ident Html.ident TeXmacs.ident Raw.ident
-let sublexer = select Latex.sublexer Html.sublexer TeXmacs.sublexer Raw.sublexer
-let sublexer_in_doc = select Latex.sublexer_in_doc Html.sublexer_in_doc TeXmacs.sublexer_in_doc Raw.sublexer_in_doc
-let initialize = select Latex.initialize Html.initialize TeXmacs.initialize Raw.initialize
+let nbsp = select Latex.nbsp Html.nbsp TeXmacs.nbsp Raw.nbsp MyST.nbsp
+let char = select Latex.char Html.char TeXmacs.char Raw.char MyST.char
+let keyword = select Latex.keyword Html.keyword TeXmacs.keyword Raw.keyword MyST.keyword
+let ident = select Latex.ident Html.ident TeXmacs.ident Raw.ident MyST.ident
+let sublexer = select Latex.sublexer Html.sublexer TeXmacs.sublexer Raw.sublexer MyST.sublexer
+let sublexer_in_doc = select Latex.sublexer_in_doc Html.sublexer_in_doc TeXmacs.sublexer_in_doc Raw.sublexer_in_doc MyST.sublexer_in_doc
+let initialize = select Latex.initialize Html.initialize TeXmacs.initialize Raw.initialize MyST.initialize
 
-let proofbox = select Latex.proofbox Html.proofbox TeXmacs.proofbox Raw.proofbox
+let proofbox = select Latex.proofbox Html.proofbox TeXmacs.proofbox Raw.proofbox MyST.proofbox
 
-let latex_char = select Latex.latex_char Html.latex_char TeXmacs.latex_char Raw.latex_char
+let latex_char = select Latex.latex_char Html.latex_char TeXmacs.latex_char Raw.latex_char MyST.latex_char
 let latex_string =
-  select Latex.latex_string Html.latex_string TeXmacs.latex_string Raw.latex_string
-let html_char = select Latex.html_char Html.html_char TeXmacs.html_char Raw.html_char
+  select Latex.latex_string Html.latex_string TeXmacs.latex_string Raw.latex_string MyST.latex_string
+let html_char = select Latex.html_char Html.html_char TeXmacs.html_char Raw.html_char MyST.html_char
 let html_string =
-  select Latex.html_string Html.html_string TeXmacs.html_string Raw.html_string
+  select Latex.html_string Html.html_string TeXmacs.html_string Raw.html_string MyST.html_string
 
 let start_emph =
-  select Latex.start_emph Html.start_emph TeXmacs.start_emph Raw.start_emph
+  select Latex.start_emph Html.start_emph TeXmacs.start_emph Raw.start_emph MyST.start_emph
 let stop_emph =
-  select Latex.stop_emph Html.stop_emph TeXmacs.stop_emph Raw.stop_emph
+  select Latex.stop_emph Html.stop_emph TeXmacs.stop_emph Raw.stop_emph MyST.stop_emph
 
 let start_details =
-  select Latex.start_details Html.start_details TeXmacs.start_details Raw.start_details
+  select Latex.start_details Html.start_details TeXmacs.start_details Raw.start_details MyST.start_details
 let stop_details =
-  select Latex.stop_details Html.stop_details TeXmacs.stop_details Raw.stop_details
+  select Latex.stop_details Html.stop_details TeXmacs.stop_details Raw.stop_details MyST.stop_details
 
 let start_latex_math =
-  select Latex.start_latex_math Html.start_latex_math TeXmacs.start_latex_math Raw.start_latex_math
+  select Latex.start_latex_math Html.start_latex_math TeXmacs.start_latex_math Raw.start_latex_math MyST.start_latex_math
 let stop_latex_math =
-  select Latex.stop_latex_math Html.stop_latex_math TeXmacs.stop_latex_math Raw.stop_latex_math
+  select Latex.stop_latex_math Html.stop_latex_math TeXmacs.stop_latex_math Raw.stop_latex_math MyST.stop_latex_math
 
 let start_verbatim =
-  select Latex.start_verbatim Html.start_verbatim TeXmacs.start_verbatim Raw.start_verbatim
+  select Latex.start_verbatim Html.start_verbatim TeXmacs.start_verbatim Raw.start_verbatim MyST.start_verbatim
 let stop_verbatim =
-  select Latex.stop_verbatim Html.stop_verbatim TeXmacs.stop_verbatim Raw.stop_verbatim
+  select Latex.stop_verbatim Html.stop_verbatim TeXmacs.stop_verbatim Raw.stop_verbatim MyST.stop_verbatim
 let verbatim_char inline =
-  select (if inline then Latex.char else output_char) Html.char TeXmacs.char Raw.char
+  select (if inline then Latex.char else output_char) Html.char TeXmacs.char Raw.char MyST.char
 let hard_verbatim_char = output_char
 
 let url =
-  select Latex.url Html.url TeXmacs.url Raw.url
+  select Latex.url Html.url TeXmacs.url Raw.url MyST.url
 
 let start_quote =
-  select Latex.start_quote Html.start_quote TeXmacs.start_quote Raw.start_quote
+  select Latex.start_quote Html.start_quote TeXmacs.start_quote Raw.start_quote MyST.start_quote
 let stop_quote =
-  select Latex.stop_quote Html.stop_quote TeXmacs.stop_quote Raw.stop_quote
+  select Latex.stop_quote Html.stop_quote TeXmacs.stop_quote Raw.stop_quote MyST.stop_quote
 
 let inf_rule_dumb assumptions (midsp,midln,midnm) conclusions =
   start_verbatim false;
@@ -1327,8 +1737,8 @@ let inf_rule_dumb assumptions (midsp,midln,midnm) conclusions =
      List.iter dumb_line conclusions);
   stop_verbatim false
 
-let inf_rule = select inf_rule_dumb Html.inf_rule inf_rule_dumb inf_rule_dumb
+let inf_rule = select inf_rule_dumb Html.inf_rule inf_rule_dumb inf_rule_dumb MyST.inf_rule
 
-let make_multi_index = select Latex.make_multi_index Html.make_multi_index TeXmacs.make_multi_index Raw.make_multi_index
-let make_index = select Latex.make_index Html.make_index TeXmacs.make_index Raw.make_index
-let make_toc = select Latex.make_toc Html.make_toc TeXmacs.make_toc Raw.make_toc
+let make_multi_index = select Latex.make_multi_index Html.make_multi_index TeXmacs.make_multi_index Raw.make_multi_index MyST.make_multi_index
+let make_index = select Latex.make_index Html.make_index TeXmacs.make_index Raw.make_index MyST.make_index
+let make_toc = select Latex.make_toc Html.make_toc TeXmacs.make_toc Raw.make_toc MyST.make_toc

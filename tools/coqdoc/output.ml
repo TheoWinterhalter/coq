@@ -1269,19 +1269,6 @@ module MyST = struct
       done;
       Buffer.contents buff
 
-  let sanitize_name s =
-    let rec loop esc i =
-      if i < 0 then if esc then escaped s else s
-      else match s.[i] with
-      | 'a'..'z' | 'A'..'Z' | '0'..'9' | '.' | '_' -> loop esc (i-1)
-      | '<' | '>' | '&' | '\'' | '\"' -> loop true (i-1)
-      | '-' | ':' -> loop esc (i-1) (* should be safe in HTML5 attribute name syntax *)
-      | _ ->
-        (* This name contains complex characters:
-           this is probably a notation string, we simply hash it. *)
-        Digest.to_hex (Digest.string s)
-    in loop false (String.length s - 1)
-
   let latex_char _ = ()
   let latex_string _ = ()
 
@@ -1341,29 +1328,14 @@ module MyST = struct
     else
       Tokens.output_tagged_ident_string s
 
-  let proofbox () = printf "<font size=-2>&#9744;</font>"
+  let proofbox () = printf "&#9744;"
 
   let reach_item_level n =
-    indentation (n-1); printf "-"
-    (* if !item_level < n then begin
-      indentation !item_level;
-      printf "- ";
-      incr item_level;
-      reach_item_level n
-    end else if !item_level > n then begin
-      decr item_level;
-      reach_item_level n
-    end *)
+    printf "-"
 
   let item n =
+    indentation (n-1);
     reach_item_level n
-    (* let old_level = !item_level in
-    reach_item_level n;
-    if n <= old_level then begin
-      printf "\n";
-      indentation old_level;
-      printf "- "
-    end *)
 
   let stop_item () = ()
 
@@ -1413,133 +1385,17 @@ module MyST = struct
      | Some n -> if lev <= n then add_toc_entry (Toc_section (lev, f, r))
                    else ());
     stop_item ();
-    printf "<a id=\"%s\"></a><h%d class=\"section\">" lab lev;
-    f ();
-    printf "</h%d>\n" lev
+    for _i = 1 to lev do printf "#" done ;
+    printf " " ;
+    f ()
 
   let rule () = printf "<hr/>\n"
 
-  (* make a HTML index from a list of triples (name,text,link) *)
-  let index_ref i c =
-    let idxc = sprintf "%s_%c" i.idx_name c in
-    !prefs.index_name ^ (if !prefs.multi_index then "_" ^ idxc ^ ".html" else ".html#" ^ idxc)
+  let make_multi_index () = ()
 
-  let letter_index category idx (c,l) =
-    if l <> [] then begin
-      let cat = if category && idx <> "global" then "(" ^ idx ^ ")" else "" in
-      printf "<a id=\"%s_%c\"></a><h2>%s %s</h2>\n" idx c (display_letter c) cat;
-      List.iter
-        (fun (id,(text,link,t)) ->
-           let id' = escaped (prepare_entry id t) in
-           printf "<a href=\"%s\">%s</a> %s<br/>\n" link id' text) l;
-      printf "<br/><br/>"
-    end
+  let make_index () = ()
 
-  let all_letters i = List.iter (letter_index false i.idx_name) i.idx_entries
-
-  (* Construction d'une liste des index (1 index global, puis 1
-     index par catégorie) *)
-  let format_global_index =
-    Index.map
-      (fun s (m,t) ->
-        if t = Library then
-         let ln = !prefs.lib_name in
-           if ln <> "" then
-               "[" ^ String.lowercase_ascii ln ^ "]", m ^ ".html", t
-           else
-               "[library]", m ^ ".html", t
-        else
-         sprintf "[%s, in <a href=\"%s.html\">%s</a>]" (type_name t) m m ,
-        sprintf "%s.html#%s" m (sanitize_name s), t)
-
-  let format_bytype_index = function
-    | Library, idx ->
-        Index.map (fun id m -> "", m ^ ".html", Library) idx
-    | (t,idx) ->
-        Index.map
-          (fun s m ->
-             let text = sprintf "[in <a href=\"%s.html\">%s</a>]" m m in
-               (text, sprintf "%s.html#%s" m (sanitize_name s), t)) idx
-
-  (* Impression de la table d'index *)
-  let print_index_table_item i =
-    printf "| %s Index\n" (String.capitalize_ascii i.idx_name);
-    List.iter
-      (fun (c,l) ->
-         if l <> [] then
-           printf "| [%s](%s)\n" (index_ref i c)
-             (display_letter c)
-         else
-           printf "| %s\n" (display_letter c))
-      i.idx_entries;
-    let n = i.idx_size in
-      printf "| (%d %s)\n" n (if n > 1 then "entries" else "entry");
-      printf "|\n"
-
-  let print_index_table idxl =
-    List.iter print_index_table_item idxl
-
-  let make_one_multi_index prt_tbl i =
-    (* Attn: make_one_multi_index crée un nouveau fichier... *)
-    let idx = i.idx_name in
-    let one_letter ((c,l) as cl) =
-      open_out_file (sprintf "%s_%s_%c.html" !prefs.index_name idx c);
-      if (!prefs.header_trailer) then header ();
-      prt_tbl (); printf "<hr/>";
-      letter_index true idx cl;
-      if List.length l > 30 then begin printf "<hr/>"; prt_tbl () end;
-      if (!prefs.header_trailer) then trailer ();
-      close_out_file ()
-    in
-      List.iter one_letter i.idx_entries
-
-  let make_multi_index () =
-    let all_index =
-      let glob,bt = Index.all_entries () in
-        (format_global_index glob) ::
-          (List.map format_bytype_index bt) in
-    let print_table () = print_index_table all_index in
-      List.iter (make_one_multi_index print_table) all_index
-
-  let make_index () =
-    let all_index =
-      let glob,bt = Index.all_entries () in
-        (format_global_index glob) ::
-          (List.map format_bytype_index bt) in
-    let print_table () = print_index_table all_index in
-    let print_one_index i =
-      if i.idx_size > 0 then begin
-        printf "<hr/>\n<h1>%s Index</h1>\n" (String.capitalize_ascii i.idx_name);
-        all_letters i
-      end
-    in
-      set_module "Index" None;
-      if !prefs.title <> "" then printf "<h1>%s</h1>\n" !prefs.title;
-      print_table ();
-      if not (!prefs.multi_index) then
-        begin
-          List.iter print_one_index all_index;
-          printf "<hr/>"; print_table ()
-        end
-
-    let make_toc () =
-        let ln = !prefs.lib_name in
-      let make_toc_entry = function
-        | Toc_library (m,sub) ->
-                stop_item ();
-                let ms = match sub with | None -> m | Some s -> m ^ ": " ^ s in
-              if ln = "" then
-                  printf "<h2><a href=\"%s.html\">%s</a></h2>\n" m ms
-              else
-                  printf "<h2><a href=\"%s.html\">%s %s</a></h2>\n" m ln ms
-        | Toc_section (n, f, r) ->
-                item n;
-                printf "<a href=\"%s\">" r; f (); printf "</a>\n"
-      in
-        printf "<div id=\"toc\">\n";
-        Queue.iter make_toc_entry toc_q;
-        stop_item ();
-        printf "</div>\n"
+  let make_toc () = ()
 
 end
 

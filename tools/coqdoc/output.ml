@@ -1384,10 +1384,10 @@ module MyST = struct
   let stop_emph () = printf "</i>"
 
   let start_details = function
-    | Some s -> printf "<details>\n<summary>\n%s\n</summary>\n" s
-    | _ -> printf "<details>\n"
+    | Some s -> printf "\n<details>\n<summary>\n\n%s\n</summary>\n\n" s
+    | _ -> printf "\n<details>\n\n"
 
-  let stop_details () = printf "</details>\n"
+  let stop_details () = printf "\n</details>\n\n"
 
   let start_comment () = printf "(*"
 

@@ -24,6 +24,7 @@ let target_full_name f =
   match !prefs.targetlang with
     | HTML -> f ^ ".html"
     | Raw -> f ^ ".txt"
+    | MyST -> f ^ ".md"
     | _ -> f ^ ".tex"
 
 (*s The following function produces the output. The default output is

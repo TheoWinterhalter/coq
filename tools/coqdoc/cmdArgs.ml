@@ -99,6 +99,8 @@ let args_options = Arg.align [
   " Produce a TeXmacs document";
   "--raw", arg_set (fun p -> { p with targetlang = Raw }),
   " Produce a text document";
+  "--myst", arg_set (fun p -> { p with targetlang = MyST }),
+  " Produce a MyST document";
   "--dvi", arg_set (fun p -> { { p with targetlang = LaTeX }
                               with compile_targets = Dvi :: !prefs.compile_targets }),
   " Output the DVI";

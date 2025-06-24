@@ -1240,13 +1240,12 @@ module MyST = struct
     end
 
   let indentation n =
-    (* for _i = 1 to n do printf "&nbsp;" done *)
-    printf "XXX (indentation)"
+    for _i = 1 to n do printf "  " done
 
-  let line_break () = printf "<br>\n"
+  let line_break () = printf "\n"
 
   let empty_line_of_code () =
-    printf "\n<br/>\n"
+    printf "\n\n"
 
   let nbsp () = printf "&nbsp;"
 
@@ -1309,48 +1308,10 @@ module MyST = struct
        | Some n -> n
        | None -> addr)
 
-  let ident_ref m fid typ s =
-    match find_module m with
-    | Local ->
-        printf "<a class=\"idref\" href=\"%s.html#%s\">" m (sanitize_name fid);
-        printf "<span class=\"id\" title=\"%s\">%s</span></a>" typ s
-    | External m when !prefs.externals ->
-        printf "<a class=\"idref\" href=\"%s.html#%s\">" m (sanitize_name fid);
-        printf "<span class=\"id\" title=\"%s\">%s</span></a>" typ s
-    | External _ | Unknown ->
-        printf "<span class=\"id\" title=\"%s\">%s</span>" typ s
-
-  let reference s r =
-    match r with
-    | Def [] -> assert false
-    | Def [fullid,ty] ->
-         let s' = sanitize_name fullid in
-         printf "<a id=\"%s\" class=\"idref\" href=\"#%s\">" s' s';
-         printf "<span class=\"id\" title=\"%s\">%s</span></a>" (type_name ty) s
-    | Def ((hd_id,_) :: tail as all) ->
-        let hd = sanitize_name hd_id in
-        let all_tys = all
-          |> List.map (fun (_,ty) -> type_name ty)
-          |> CList.sort_uniquize String.compare
-          |> String.concat ", " in
-        printf "<a id=\"%s\" class=\"idref\" href=\"#%s\"><span class=\"id\" title=\"%s\">" hd hd all_tys;
-        List.iter (fun (fullid,_) ->
-          let s' = sanitize_name fullid in
-          printf "<span id=\"%s\" class=\"id\">" s')
-        tail;
-        printf "%s" s;
-        List.iter (fun _ -> printf "</span>") tail;
-        printf "</span></a>";
-    | Ref (m,fullid,ty) ->
-        ident_ref m fullid (type_name ty) s
-
   let output_sublexer_string doescape issymbchar tag s =
     let s = if doescape then escaped s else s in
-    match tag with
-    | Some ref -> reference s ref
-    | None ->
-        if issymbchar then output_string s
-        else printf "<span class=\"id\" title=\"var\">%s</span>" s
+    if issymbchar then output_string s
+    else printf "%s" s
 
   let sublexer c loc =
     let tag =
@@ -1370,123 +1331,79 @@ module MyST = struct
     match Tokens.translate s with Some s -> s | None -> escaped s
 
   let keyword s loc =
-    printf "<span class=\"id\" title=\"keyword\">%s</span>" (translate s)
+    printf "%s" (translate s)
 
   let ident s loc =
-    try
-      match loc with
-      | None -> raise Not_found
-      | Some loc ->
-         reference (translate s) (Index.find (get_module false) loc)
-    with Not_found ->
-      if is_tactic s then
-        printf "<span class=\"id\" title=\"tactic\">%s</span>" (translate s)
-      else if is_keyword s then
-        printf "<span class=\"id\" title=\"keyword\">%s</span>" (translate s)
-      else if !prefs.interpolate && !in_doc (* always a var otherwise *) then
-        try reference (translate s) (Index.find_string s)
-        with Not_found -> Tokens.output_tagged_ident_string s
-      else
-        Tokens.output_tagged_ident_string s
+    if is_tactic s then
+      printf "%s" (translate s)
+    else if is_keyword s then
+      printf "%s" (translate s)
+    else
+      Tokens.output_tagged_ident_string s
 
   let proofbox () = printf "<font size=-2>&#9744;</font>"
 
-  let rec reach_item_level n =
-    if !item_level < n then begin
-      printf "<ul class=\"doclist\">\n<li>"; incr item_level;
+  let reach_item_level n =
+    indentation (n-1); printf "-"
+    (* if !item_level < n then begin
+      indentation !item_level;
+      printf "- ";
+      incr item_level;
       reach_item_level n
     end else if !item_level > n then begin
-      printf "\n</li>\n</ul>\n"; decr item_level;
+      decr item_level;
       reach_item_level n
-    end
+    end *)
 
   let item n =
-    let old_level = !item_level in
+    reach_item_level n
+    (* let old_level = !item_level in
     reach_item_level n;
-    if n <= old_level then printf "\n</li>\n<li>"
+    if n <= old_level then begin
+      printf "\n";
+      indentation old_level;
+      printf "- "
+    end *)
 
-  let stop_item () = reach_item_level 0
+  let stop_item () = ()
 
-  let start_coq () = if not !prefs.raw_comments then printf "<div class=\"code\">\n"
+  let start_coq () = if not !prefs.raw_comments then printf "```{coq}\n"
 
-  let end_coq () = if not !prefs.raw_comments then printf "</div>\n"
+  let end_coq () = if not !prefs.raw_comments then printf "```\n"
 
   let start_doc () = in_doc := true;
     if not !prefs.raw_comments then
-      printf "\n<div class=\"doc\">\n"
+      printf "\n\n"
 
   let end_doc () = in_doc := false;
     stop_item ();
-    if not !prefs.raw_comments then printf "</div>\n"
+    if not !prefs.raw_comments then printf "\n"
 
   let start_emph () = printf "<i>"
 
   let stop_emph () = printf "</i>"
 
   let start_details = function
-    | Some s -> printf "<details><summary>%s</summary>" s
-    | _ -> printf "<details>"
+    | Some s -> printf "<details>\n<summary>\n%s\n</summary>\n" s
+    | _ -> printf "<details>\n"
 
-  let stop_details () = printf "</details>"
+  let stop_details () = printf "</details>\n"
 
-  let start_comment () = printf "<span class=\"comment\">(*"
+  let start_comment () = printf "(*"
 
-  let end_comment () = printf "*)</span>"
+  let end_comment () = printf "*)"
 
   let start_inline_coq () =
-    if !prefs.inline_notmono then printf "<span class=\"inlinecodenm\">"
-                       else printf "<span class=\"inlinecode\">"
+    if !prefs.inline_notmono then printf "`"
+                       else printf "`"
 
-  let end_inline_coq () = printf "</span>"
+  let end_inline_coq () = printf "`"
 
   let start_inline_coq_block () = line_break (); start_inline_coq ()
 
   let end_inline_coq_block () = end_inline_coq ()
 
-  let paragraph () = printf "\n<div class=\"paragraph\"> </div>\n\n"
-
-  (* inference rules *)
-  let inf_rule assumptions (_,_,midnm) conclusions =
-    (* this first function replaces any occurrence of 3 or more spaces
-       in a row with "&nbsp;"s.  We do this to the assumptions so that
-       people can put multiple rules on a line with nice formatting *)
-    let replace_spaces str =
-      let rec copy a n = match n with 0 -> [] | n -> (a :: copy a (n - 1)) in
-      let results = Str.full_split (Str.regexp "[' '][' '][' ']+") str in
-      let strs = List.map (fun r -> match r with
-                                    | Str.Text s  -> [s]
-                                    | Str.Delim s ->
-                                        copy "&nbsp;" (String.length s))
-                          results
-      in
-        String.concat "" (List.concat strs)
-    in
-    let start_assumption line =
-          (printf "<tr class=\"infruleassumption\">\n";
-           printf "  <td class=\"infrule\">%s</td>\n" (replace_spaces line)) in
-    let end_assumption () =
-          (printf "  <td></td>\n";
-           printf "</tr>\n") in
-    let rec print_assumptions hyps =
-          match hyps with
-          | []                 -> start_assumption "&nbsp;&nbsp;"
-          | [(_,hyp)]          -> start_assumption hyp
-          | ((_,hyp) :: hyps') -> (start_assumption hyp;
-                                   end_assumption ();
-                                   print_assumptions hyps') in
-    printf "<center><table class=\"infrule\">\n";
-    print_assumptions assumptions;
-    printf "  <td class=\"infrulenamecol\" rowspan=\"3\">\n";
-    (match midnm with
-     | None   -> printf "    &nbsp;\n  </td>"
-     | Some s -> printf "    %s &nbsp;\n  </td>" s);
-    printf "</tr>\n";
-    printf "<tr class=\"infrulemiddle\">\n";
-    printf "  <td class=\"infrule\"><hr /></td>\n";
-    printf "</tr>\n";
-    print_assumptions conclusions;
-    end_assumption ();
-    printf "</table></center>"
+  let paragraph () = printf "\n\n\n"
 
   let section lev f =
     let lab = new_label () in
@@ -1546,23 +1463,21 @@ module MyST = struct
 
   (* Impression de la table d'index *)
   let print_index_table_item i =
-    printf "<tr>\n<td>%s Index</td>\n" (String.capitalize_ascii i.idx_name);
+    printf "| %s Index\n" (String.capitalize_ascii i.idx_name);
     List.iter
       (fun (c,l) ->
          if l <> [] then
-           printf "<td><a href=\"%s\">%s</a></td>\n" (index_ref i c)
+           printf "| [%s](%s)\n" (index_ref i c)
              (display_letter c)
          else
-           printf "<td>%s</td>\n" (display_letter c))
+           printf "| %s\n" (display_letter c))
       i.idx_entries;
     let n = i.idx_size in
-      printf "<td>(%d %s)</td>\n" n (if n > 1 then "entries" else "entry");
-      printf "</tr>\n"
+      printf "| (%d %s)\n" n (if n > 1 then "entries" else "entry");
+      printf "|\n"
 
   let print_index_table idxl =
-    printf "<table>\n";
-    List.iter print_index_table_item idxl;
-    printf "</table>\n"
+    List.iter print_index_table_item idxl
 
   let make_one_multi_index prt_tbl i =
     (* Attn: make_one_multi_index crée un nouveau fichier... *)
@@ -1737,7 +1652,7 @@ let inf_rule_dumb assumptions (midsp,midln,midnm) conclusions =
      List.iter dumb_line conclusions);
   stop_verbatim false
 
-let inf_rule = select inf_rule_dumb Html.inf_rule inf_rule_dumb inf_rule_dumb MyST.inf_rule
+let inf_rule = select inf_rule_dumb Html.inf_rule inf_rule_dumb inf_rule_dumb inf_rule_dumb
 
 let make_multi_index = select Latex.make_multi_index Html.make_multi_index TeXmacs.make_multi_index Raw.make_multi_index MyST.make_multi_index
 let make_index = select Latex.make_index Html.make_index TeXmacs.make_index Raw.make_index MyST.make_index

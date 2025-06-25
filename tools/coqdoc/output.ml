@@ -1351,9 +1351,9 @@ module MyST = struct
     stop_item ();
     if not !prefs.raw_comments then printf "\n"
 
-  let start_emph () = printf "<i>"
+  let start_emph () = printf "*"
 
-  let stop_emph () = printf "</i>"
+  let stop_emph () = printf "*"
 
   let start_details = function
     | Some s -> printf "\n<details>\n<summary>\n\n%s\n</summary>\n\n" s

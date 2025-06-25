@@ -881,9 +881,13 @@ and doc_list_bol indents = parse
 
 (*s Scanning documentation elsewhere *)
 and doc indents = parse
-  | nl
-      { new_lines 1 lexbuf;
-        Output.char '\n';
+  | (((nl space*)+ as s))
+      { let nl_count = count_newlines s in
+        if nl_count > 1 then begin
+          new_lines 1 lexbuf;
+          Output.char '\n';
+        end
+        else Output.char ' ';
         match indents with
         | Some ls -> doc_list_bol ls lexbuf
         | None -> doc_bol lexbuf }
